@@ -1,0 +1,58 @@
+name: "IAM Policy Autopilot"
+description: >
+  Generates a baseline least-privilege IAM policy from a Terraform plan
+  (JSON), using AWS Labs' iam-policy-autopilot. Static analysis only - reads
+  the plan, never touches the real AWS account. Meant to run inside an
+  existing terraform-plan job, right after `terraform show -json` produces
+  the plan JSON, so PRs get a baseline policy to compare against whatever
+  is hand-written in the repo - no live credentials, no apply, no proxy.
+author: "jalcalaroot"
+
+inputs:
+  plan-file:
+    description: "Path to the Terraform plan in JSON format (output of `terraform show -json <planfile>`)"
+    required: true
+  region:
+    description: "AWS region to use for resource ARNs in the generated policy"
+    required: false
+    default: ""
+  account-id:
+    description: "AWS account ID to use for resource ARNs in the generated policy"
+    required: false
+    default: ""
+
+outputs:
+  policy-file:
+    description: "Path to the generated baseline policy JSON file"
+    value: ${{ steps.generate.outputs.policy-file }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Install uv
+      uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+
+    - name: Generate baseline IAM policy from the plan
+      id: generate
+      shell: bash
+      env:
+        DISABLE_IAM_POLICY_AUTOPILOT_TELEMETRY: "true"
+      run: |
+        set -euo pipefail
+
+        args=(generate-policies "${{ inputs.plan-file }}" --pretty)
+        if [ -n "${{ inputs.region }}" ]; then
+          args+=(--region "${{ inputs.region }}")
+        fi
+        if [ -n "${{ inputs.account-id }}" ]; then
+          args+=(--account "${{ inputs.account-id }}")
+        fi
+
+        uvx iam-policy-autopilot "${args[@]}" > iam-policy-autopilot-baseline.json
+        echo "policy-file=iam-policy-autopilot-baseline.json" >> "$GITHUB_OUTPUT"
+
+    - name: Upload generated policy as an artifact
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      with:
+        name: iam-policy-autopilot-baseline
+        path: ${{ steps.generate.outputs.policy-file }}
